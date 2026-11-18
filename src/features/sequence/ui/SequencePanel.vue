@@ -47,9 +47,10 @@ defineEmits<{ seek: [n: number]; play: []; capture: [] }>();
           ><small>{{
             i === 0
               ? "START"
-              : i === doc.steps.length - 1
-                ? "FINISH"
-                : "FOLD " + String(i).padStart(2, "0")
+              : (s.links?.length ? "LINKED · " : "") +
+                (i === doc.steps.length - 1
+                  ? "FINISH"
+                  : "FOLD " + String(i).padStart(2, "0"))
           }}</small></span
         ><i v-if="i < doc.steps.length - 1"></i>
       </button>

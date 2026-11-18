@@ -12,7 +12,9 @@ import { PaperPanel, papers, replacePaper } from "../features/paper";
 import {
   CreasePanel,
   selectCrease,
-  toggleDirection,
+  selectRange,
+  selectAll,
+  promoteCrease,
   selectedCrease,
 } from "../features/creases";
 import {
@@ -24,22 +26,36 @@ import {
   applyTarget,
 } from "../features/fold";
 import {
+  LinkPanel,
+  analyzeDoc,
+  createLinkGroup,
+  updateLinkGroup,
+  removeLinkGroup,
+  clearLinks,
+  reverseCrease,
+} from "../features/links";
+import {
   SequencePanel,
   makeSteps,
   seek,
   captureStep,
+  syncCurrentStep,
   usePlayer,
 } from "../features/sequence";
 import { Viewport, ObservePanel, setView } from "../features/observe";
 const doc = reactive(createDocument(papers[0]!, makeSteps(papers[0]!)));
 const pose = computed(() => solvePose(doc.paper, doc.angles)),
-  hinges = computed(() => hingePositions(doc.paper, pose.value));
+  hinges = computed(() => hingePositions(doc.paper, pose.value)),
+  analysis = computed(() => analyzeDoc(doc));
 const { toggle } = usePlayer(doc);
 const help = ref(false),
-  toast = ref("");
+  toast = ref(""),
+  ratio = ref(2);
+let toastTimer = 0;
 function notify(s: string) {
   toast.value = s;
-  setTimeout(() => (toast.value = ""), 2400);
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => (toast.value = ""), 2600);
 }
 function choosePaper(id: string) {
   const p = papers.find((p) => p.id === id);
@@ -51,13 +67,43 @@ function choosePaper(id: string) {
 }
 function reset() {
   flatten(doc);
+  doc.links = [];
+  doc.directions = Object.fromEntries(
+    doc.paper.creases.map((c) => [c.id, c.target < 0 ? -1 : 1]),
+  );
   doc.steps = makeSteps(doc.paper);
   setView(doc, "iso");
-  notify("已回到平展纸张");
+  notify("已回到平展纸张，联动关系已清空");
 }
 function capture() {
   captureStep(doc);
-  notify("当前形态已保存到步骤 " + (doc.step + 1));
+  notify("当前形态与联动关系已保存为步骤 " + String(doc.step + 1).padStart(2, "0"));
+}
+function createLink(kind: "same" | "opposite" | "ratio") {
+  const outcome = createLinkGroup(doc, kind, ratio.value);
+  if (outcome.ok) syncCurrentStep(doc);
+  if (outcome.text) notify(outcome.text);
+}
+function updateLink(
+  id: string,
+  patch: Partial<{ kind: "same" | "opposite" | "ratio"; ratio: number }>,
+) {
+  const outcome = updateLinkGroup(doc, id, patch);
+  if (outcome.ok) syncCurrentStep(doc);
+  if (outcome.text) notify(outcome.text);
+}
+function removeLink(id: string) {
+  const outcome = removeLinkGroup(doc, id);
+  if (outcome.ok) syncCurrentStep(doc);
+  notify(outcome.text);
+}
+function clearAllLinks() {
+  const outcome = clearLinks(doc);
+  if (outcome.ok) syncCurrentStep(doc);
+  notify(outcome.text);
+}
+function reverse() {
+  notify(reverseCrease(doc).text);
 }
 </script>
 <template>
@@ -96,11 +142,12 @@ function capture() {
         <aside class="left-sidebar">
           <PaperPanel :doc="doc" @paper="choosePaper" /><CreasePanel
             :doc="doc"
-            @select="selectCrease(doc, $event)"
+            @select="(id, additive) => selectCrease(doc, id, additive)"
+            @all="selectAll(doc)"
           />
           <div class="sidebar-footer">
             <Layers :size="13" /> 单张纸 ·
-            {{ doc.paper.faces.length }} 个关联纸面
+            {{ doc.paper.faces.length }} 个关联纸面 · {{ doc.links.length }} 组联动
           </div>
         </aside>
         <div class="center">
@@ -121,7 +168,9 @@ function capture() {
             :doc="doc"
             :pose="pose"
             :hinges="hinges"
-            @select="selectCrease(doc, $event)"
+            :analysis="analysis"
+            @select="(id, additive) => selectCrease(doc, id, additive)"
+            @range="(ids) => selectRange(doc, ids)"
           />
           <div class="instruction">
             <span class="instruction-number">0{{ doc.step + 1 }}</span>
@@ -143,8 +192,18 @@ function capture() {
           <FoldPanel
             :doc="doc"
             @angle="changeAngle(doc, $event)"
-            @direction="toggleDirection(doc)"
+            @direction="reverse"
             @target="applyTarget(doc)"
+          />
+          <LinkPanel
+            v-model:ratio="ratio"
+            :doc="doc"
+            :analysis="analysis"
+            @create="createLink"
+            @update="updateLink"
+            @remove="removeLink"
+            @clear="clearAllLinks"
+            @select="promoteCrease(doc, $event)"
           /><ObservePanel :doc="doc" />
         </aside>
       </div>
@@ -169,12 +228,14 @@ function capture() {
         <div class="eyebrow">A SMALL GUIDE</div>
         <h2>从第一道折痕开始</h2>
         <p>
-          选择纸张与颜色，点选折痕后拖动角度滑杆。父纸面转动时，关联纸面会一起运动。
+          选择纸张与颜色，点选折痕后拖动角度滑杆，也可以直接拖动画面中的折痕。父纸面转动时，关联纸面会一起运动。
         </p>
         <p>
-          下方步骤可还原对应形态，也可保存当前角度后播放。拖动画面旋转视角，滚轮缩放，下载按钮可保存当前观察图。
+          按住 Shift 点选或框选多条折痕，可建立同角、反向或比例联动；拖动其中任意一条，整组按比例同动。关系跨越父子纸面时，角度正负始终以各自局部折轴为准。
         </p>
-        <p>作品保留在本次会话中，刷新会重新开始。</p>
+        <p>
+          闭环关系会自动区分冗余与矛盾。矛盾时不会保存，并保留上一次完整形态。达到角度上限时整组按比例停住。保存后的步骤包含联动关系，播放与单步还原结果一致。
+        </p>
         <button class="primary" @click="help = false">开始探索 ↗</button>
       </section>
     </div>

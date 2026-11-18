@@ -1,4 +1,10 @@
 import type { Document, Paper, Step } from "./types";
+
+const initialDirections = (paper: Paper) =>
+  Object.fromEntries(
+    paper.creases.map((c) => [c.id, c.target < 0 ? -1 : 1]),
+  );
+
 export function createDocument(paper: Paper, steps: Step[]): Document {
   return {
     paper,
@@ -6,13 +12,22 @@ export function createDocument(paper: Paper, steps: Step[]): Document {
     back: "#f8dec2",
     texture: "fiber",
     selected: paper.creases[0]?.id ?? "",
+    selection: paper.creases[0]?.id ? [paper.creases[0]!.id] : [],
     angles: { ...steps[1]?.angles },
-    directions: Object.fromEntries(paper.creases.map((c) => [c.id, 1])),
+    directions: initialDirections(paper),
+    links: [],
+    feedback: null,
     steps,
     step: 1,
     playing: false,
     speed: 1,
-    view: { yaw: -35, pitch: 50, zoom: 1, grid: true, wire: true },
+    view: {
+      yaw: -35,
+      pitch: 50,
+      zoom: 1,
+      grid: true,
+      wire: true,
+    },
   };
 }
 export const clamp = (n: number, min: number, max: number) =>
